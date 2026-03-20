@@ -1,0 +1,47 @@
+diff --git a/node_modules/@discordjs/ws/dist/index.js b/node_modules/@discordjs/ws/dist/index.js
+index 106b2ec..cde7848 100644
+--- a/node_modules/@discordjs/ws/dist/index.js
++++ b/node_modules/@discordjs/ws/dist/index.js
+@@ -674,9 +674,39 @@ var WebSocketShard = class extends import_async_event_emitter.AsyncEventEmitter
+     const session = await this.strategy.retrieveSessionInfo(this.id);
+     const url = `${session?.resumeURL ?? this.strategy.options.gatewayInformation.url}?${params.toString()}`;
+     this.debug([`Connecting to ${url}`]);
+-    const connection = new WebSocketConstructor(url, [], {
+-      handshakeTimeout: this.strategy.options.handshakeTimeout ?? void 0
+-    });
++    const _wsProxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
++    const _wsOpts = { handshakeTimeout: this.strategy.options.handshakeTimeout ?? void 0 };
++    if (_wsProxyUrl) {
++      const _net = require('net');
++      const _tls = require('tls');
++      const _proxyParsed = new URL(_wsProxyUrl);
++      _wsOpts.createConnection = function(options, callback) {
++        const targetHost = options.host || options.hostname;
++        const targetPort = options.port || 443;
++        const socket = _net.createConnection(parseInt(_proxyParsed.port) || 3128, _proxyParsed.hostname);
++        socket.once('error', callback);
++        socket.once('connect', function() {
++          socket.removeListener('error', callback);
++          const connectReq = 'CONNECT ' + targetHost + ':' + targetPort + ' HTTP/1.1\r\n' +
++            'Host: ' + targetHost + ':' + targetPort + '\r\n\r\n';
++          socket.write(connectReq);
++          let buf = '';
++          socket.on('data', function onData(chunk) {
++            buf += chunk.toString('ascii');
++            if (buf.indexOf('\r\n\r\n') !== -1) {
++              socket.removeListener('data', onData);
++              if (/^HTTP\/1\.[01] 200/.test(buf)) {
++                const tlsSocket = _tls.connect(Object.assign({}, options, { socket: socket, servername: options.servername || targetHost }));
++                callback(null, tlsSocket);
++              } else {
++                callback(new Error('Proxy CONNECT failed: ' + buf.split('\r\n')[0]));
++              }
++            }
++          });
++        });
++      };
++    }
++    const connection = new WebSocketConstructor(url, [], _wsOpts);
+     connection.binaryType = "arraybuffer";
+     connection.onmessage = (event) => {
+       void this.onMessage(event.data, event.data instanceof ArrayBuffer);
